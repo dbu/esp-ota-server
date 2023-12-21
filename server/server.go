@@ -2,13 +2,11 @@ package server
 
 import (
 	"crypto/md5"
-	"crypto/sha512"
 	"encoding/hex"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 	"text/template"
 
 	"github.com/labstack/echo/v4"
@@ -36,38 +34,43 @@ func (s server) Render(w io.Writer, name string, data interface{}, c echo.Contex
 	return s.templates.ExecuteTemplate(w, name, data)
 }
 
-func getEspHeader(hdr http.Header, key string) (ret []string, ok bool) {
-	ret, ok = hdr[http.CanonicalHeaderKey("x-esp8266-"+key)]
+func getEspHeader(hdr http.Header, key string) (ret string, ok bool) {
+	var val []string
+	val, ok = hdr[http.CanonicalHeaderKey("x-esp8266-"+key)]
 	if !ok {
-		ret, ok = hdr[http.CanonicalHeaderKey("x-esp32-"+key)]
+		val, ok = hdr[http.CanonicalHeaderKey("x-esp32-"+key)]
+		if !ok {
+			ret = ""
+			return
+		}
 	}
+	ret = val[0]
 	return
 }
 
-func (s server) getBinaryFile(c echo.Context) error {
-	lg := c.Logger()
+func (s server) getBinaryFile(context echo.Context) error {
+	logger := context.Logger()
 
-	project := c.Param("project")
-	filename := c.Param("file")
+	project := context.Param("project")
+	filename := context.Param("file")
 
 	path := filepath.Join(s.config.DataDirPath, project, filename)
 	file, err := os.Open(path)
 	if err != nil && os.IsNotExist(err) {
-		lg.Warnj(log.JSON{
+		logger.Warnj(log.JSON{
 			"msg":       "File not found",
 			"err":       err,
 			"file_path": path,
 		})
-		return c.String(http.StatusNotFound, "no file")
+		return context.String(http.StatusNotFound, "no file")
 	} else if err != nil {
 		return err
 	}
 	defer file.Close()
 
 	md5hasher := md5.New()
-	sha512hasher := sha512.New()
 
-	teeRd := io.TeeReader(io.TeeReader(file, md5hasher), sha512hasher)
+	teeRd := io.TeeReader(file, md5hasher)
 
 	b, err := io.ReadAll(teeRd)
 	if err != nil {
@@ -75,71 +78,79 @@ func (s server) getBinaryFile(c echo.Context) error {
 	}
 
 	md5sum := hex.EncodeToString(md5hasher.Sum(nil))
-	sha512sum := hex.EncodeToString(sha512hasher.Sum(nil))
 
-	hdr := c.Request().Header
+	hdr := context.Request().Header
 
-	lg.Printj(log.JSON{
+	logger.Printj(log.JSON{
 		"esp_request_headers": hdr,
 	})
 
-	//staMac, _ := hdr["X-Esp8266-Sta-Mac"]
+	staMac, macOk := getEspHeader(hdr, "sta-mac")
 	//apMac, _ := hdr["X-Esp8266-Ap-Mac"]
 	//freeSpace, _ := hdr["X-Esp8266-Free-Space"]
 	//sketchSize, _ := hdr["X-Esp8266-Sketch-Size"]
 	sketchMd5, md5ok := getEspHeader(hdr, "sketch-md5")
 	//chipSize, _ := hdr["X-Esp8266-Chip-Size"]
 	//sdkVersion, _ := hdr["X-Esp8266-Sdk-Version"]
-	mode, ok := getEspHeader(hdr, "mode")
-	version, vok := getEspHeader(hdr, "version")
 
-	if !ok {
-		return c.String(http.StatusBadRequest, "bad request")
+	/**
+	 * mode can be one of:
+	 * - sketch: download sketch
+	 * - spiffs: ask for filesystem image
+	 * - version: ask for available version. expects answer in x-version header,
+	 */
+	mode, modeOk := getEspHeader(hdr, "mode")
+	version, versionOk := getEspHeader(hdr, "version")
+
+	if !modeOk {
+		return context.String(http.StatusBadRequest, "bad request")
+	}
+	if "sketch" != mode {
+		logger.Info("Mode " + mode + " not implemented")
+		return s.get422(context)
 	}
 
 	sendFile := true
-	if vok {
-		vmap := map[string]string{}
-		for _, kv := range strings.Split(version[0], " ") {
-			n := strings.SplitN(kv, ":", 2)
-			vmap[n[0]] = n[1]
-		}
+	if versionOk {
+		// TODO version handling
+		// also set x-version in response
+	} else {
+		version = "-unspecified-"
 
-		c.Logger().Printj(log.JSON{
-			"esp_version_map": vmap,
-		})
-
-		// if version has MD5
-		md5, mok := vmap["md5"]
-		if mok {
-			sendFile = md5 != md5sum
-		}
 	}
 	if md5ok {
-		sendFile = sketchMd5[0] != md5sum
+		sendFile = sketchMd5 != md5sum
+	} else {
+		sketchMd5 = "-unspecified-"
+	}
+	if !macOk {
+		staMac = "-unspecified-"
 	}
 
-	c.Response().Header()["x-MD5"] = []string{md5sum} // do not do strings.Title()
-	c.Response().Header().Set("x-SHA512", sha512sum)  // not used by actual version
-	lg.Printj(log.JSON{
-		"esp_mode":  mode[0],
-		"send_file": sendFile,
-		"file_path": path,
-		"file_size": len(b),
+	context.Response().Header()["x-MD5"] = []string{md5sum} // do not do strings.Title()
+	logger.Printj(log.JSON{
+		"esp_mac":        staMac,
+		"esp_mode":       mode,
+		"esp_version":    version,
+		"esp_sketch_md5": sketchMd5,
+		"our_md5":        md5sum,
+		"send_file":      sendFile,
+		"file_path":      path,
+		"file_size":      len(b),
 	})
 
 	if sendFile {
-		//return c.Blob(http.StatusOK, "application/ocetet-stream", b)
-		return c.File(path)
+		return context.File(path)
 	} else {
-		return c.String(http.StatusNotModified, "")
+		return context.String(http.StatusNotModified, "")
 	}
 }
 
-func (s server) get403(c echo.Context) error {
-	return c.Render(http.StatusForbidden, "403.ghtm", map[string]interface{}{
-		"BarbradyJpgBase64": "/assets/barbrady.jpg",
-	})
+func (s server) get403(context echo.Context) error {
+	return context.Render(http.StatusForbidden, "403.ghtm", map[string]interface{}{})
+}
+func (s server) get422(context echo.Context) error {
+	return context.String(http.StatusUnprocessableEntity, "Can not handle the request")
 }
 
 func parseTemplates() (*template.Template, error) {
@@ -147,21 +158,21 @@ func parseTemplates() (*template.Template, error) {
 }
 
 func Serve(config Config) error {
-	e := echo.New()
+	echoServer := echo.New()
 
-	e.Use(middleware.Logger())
-	e.Use(middleware.Recover())
+	echoServer.Use(middleware.Logger())
+	echoServer.Use(middleware.Recover())
 
 	newpath, err := filepath.Abs(config.DataDirPath)
 	if err != nil {
-		e.Logger.Fatal("can't abs data-dir")
+		echoServer.Logger.Fatal("can't abs data-dir")
 		return err
 	}
 	if stat, err := os.Stat(newpath); err == nil && stat.IsDir() {
-		e.Logger.Info("Data-dir: ", newpath)
+		echoServer.Logger.Info("Data-dir: ", newpath)
 		config.DataDirPath = newpath
 	} else {
-		e.Logger.Fatal("data-dir not exist! ", newpath)
+		echoServer.Logger.Fatal("data-dir not exist! ", newpath)
 		return err
 	}
 
@@ -177,11 +188,10 @@ func Serve(config Config) error {
 
 	assetHandler := http.FileServer(http.FS(assets.Assets))
 
-	e.Renderer = s
-	e.GET("/bin/:project/:file", s.getBinaryFile)
-	//e.POST("/bin/:project/:file", postBinaryFile)
-	e.GET("/assets/*", echo.WrapHandler(http.StripPrefix("/assets/", assetHandler)))
-	e.GET("/", s.get403)
+	echoServer.Renderer = s
+	echoServer.GET("/bin/:project/:file", s.getBinaryFile)
+	echoServer.GET("/assets/*", echo.WrapHandler(http.StripPrefix("/assets/", assetHandler)))
+	echoServer.GET("/", s.get403)
 
-	return e.Start(config.Bind)
+	return echoServer.Start(config.Bind)
 }

@@ -1,8 +1,5 @@
 # Binaries for programs and plugins
-*.exe
-*.dll
-*.so
-*.dylib
+espotad
 
 # Test binary, build with `go test -c`
 *.test
@@ -16,6 +13,5 @@
 vendor/
 data/
 main
-*.swp
 espotad-*
 app
