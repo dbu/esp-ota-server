@@ -59,6 +59,7 @@ Note that we don't cache the vendors, so this is inefficient.
 
 TODO
 ----
+- If there are multiple results, use JS to try to find which one is found. ESP webserver needs to set `Access-Control-Allow-Origin` header to the server where espotad runs.
 - Cache go vendors in Dockerfile build
 - Handle version
 - Provide syncing data files when we don't want to overwrite the whole SPIFFS image

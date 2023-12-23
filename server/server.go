@@ -115,6 +115,7 @@ func (s server) lookup(context echo.Context) error {
 		return context.Redirect(http.StatusFound, "http://"+ips[0])
 	}
 
+	context.Response().Header().Set("Access-Control-Allow-Origin", "*")
 	return context.Render(http.StatusOK, "iplist.ghtm", map[string]interface{}{
 		"network": network,
 		"ips":     ips,
