@@ -1,12 +1,17 @@
 package server
 
 import (
+	"bytes"
 	"crypto/md5"
 	"encoding/hex"
+	"encoding/json"
 	"io"
+	"io/ioutil"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"text/template"
 
 	"github.com/labstack/echo/v4"
@@ -21,6 +26,7 @@ import (
 type server struct {
 	config    Config
 	templates *template.Template
+	registry  *TTLMap
 }
 
 // Render renders a template document
@@ -48,13 +54,80 @@ func getEspHeader(hdr http.Header, key string) (ret string, ok bool) {
 	return
 }
 
+func (s server) register(context echo.Context) error {
+	logger := context.Logger()
+	buf, err := ioutil.ReadAll(context.Request().Body)
+	if err != nil {
+		logger.Error("Could not read request body")
+		return context.String(http.StatusBadRequest, "Invalid Request")
+	}
+
+	jsonMap := make(map[string]interface{})
+	err = json.NewDecoder(bytes.NewReader(buf)).Decode(&jsonMap)
+	if err != nil {
+		logger.Warn("Invalid json: ", string(buf))
+		return context.String(http.StatusBadRequest, "Invalid json")
+	}
+	logger.Print("Valid json")
+
+	hdr := context.Request().Header
+	staMac, macOk := getEspHeader(hdr, "sta-mac")
+	if !macOk {
+		logger.Warn("Missing MAC header")
+		return context.String(http.StatusBadRequest, "Missing MAC header")
+	}
+
+	ipMap := jsonMap["ip"]
+	ip, ok := ipMap.(string)
+	if !ok {
+		logger.Warn("Missing id in json: ", string(buf))
+		return context.String(http.StatusBadRequest, "Missing ip in JSON body")
+	}
+	networkMap := jsonMap["network"]
+	network, ok := networkMap.(string)
+	if !ok {
+		logger.Warn("Missing network in json: ", string(buf))
+		return context.String(http.StatusBadRequest, "Missing network in JSON body")
+	}
+
+	logger.Print("Welcome: IP " + ip + " (mac: " + staMac + ") from network " + network)
+	s.registry.Put(strings.ToLower(network), staMac, ip)
+
+	return context.String(http.StatusCreated, "Registered")
+}
+
+func (s server) lookup(context echo.Context) error {
+	logger := context.Logger()
+	network := context.Param("network")
+	ips := s.registry.Get(strings.ToLower(network))
+	if len(ips) == 0 {
+		escNetwork, errE := url.QueryUnescape(network)
+		if nil == errE {
+			network = escNetwork
+			ips = s.registry.Get(strings.ToLower(network))
+		}
+		if len(ips) == 0 {
+			logger.Print("Did not find '" + network + "' in " + s.registry.Keys())
+			return context.String(http.StatusNotFound, "No ips registered for "+network)
+		}
+	}
+	if len(ips) == 1 {
+		return context.Redirect(http.StatusFound, "http://"+ips[0])
+	}
+
+	return context.Render(http.StatusOK, "iplist.ghtm", map[string]interface{}{
+		"network": network,
+		"ips":     ips,
+	})
+}
+
 func (s server) getBinaryFile(context echo.Context) error {
 	logger := context.Logger()
 
 	project := context.Param("project")
 	filename := context.Param("file")
 
-	path := filepath.Join(s.config.DataDirPath, project, filename)
+	path := filepath.Join(s.config.DataDirPath, "bin", project, filename)
 	file, err := os.Open(path)
 	if err != nil && os.IsNotExist(err) {
 		logger.Warnj(log.JSON{
@@ -146,8 +219,8 @@ func (s server) getBinaryFile(context echo.Context) error {
 	}
 }
 
-func (s server) get403(context echo.Context) error {
-	return context.Render(http.StatusForbidden, "403.ghtm", map[string]interface{}{})
+func (s server) getIndex(context echo.Context) error {
+	return context.Render(http.StatusOK, "index.ghtm", map[string]interface{}{})
 }
 func (s server) get422(context echo.Context) error {
 	return context.String(http.StatusUnprocessableEntity, "Can not handle the request")
@@ -184,6 +257,7 @@ func Serve(config Config) error {
 	s := server{
 		config:    config,
 		templates: templates,
+		registry:  CreateTTLMap(3600),
 	}
 
 	assetHandler := http.FileServer(http.FS(assets.Assets))
@@ -191,7 +265,9 @@ func Serve(config Config) error {
 	echoServer.Renderer = s
 	echoServer.GET("/bin/:project/:file", s.getBinaryFile)
 	echoServer.GET("/assets/*", echo.WrapHandler(http.StripPrefix("/assets/", assetHandler)))
-	echoServer.GET("/", s.get403)
+	echoServer.GET("/", s.getIndex)
+	echoServer.POST("/register", s.register)
+	echoServer.GET("/lookup/:network", s.lookup)
 
 	return echoServer.Start(config.Bind)
 }

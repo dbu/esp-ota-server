@@ -7,8 +7,8 @@ import (
 )
 
 var opts struct {
-	Bind    string `short:"s" name:"bind" env:"EOBIND" default:":8092" help:"bind address"`
-	BaseUrl string `short:"u" name:"base-url" env:"EOBASEURL" default:"http://localhost:8092" help:"base url"`
+	Bind    string `short:"s" name:"bind" env:"EOBIND" default:":80" help:"bind address"`
+	BaseUrl string `short:"u" name:"base-url" env:"EOBASEURL" default:"http://localhost:80" help:"base url"`
 	DataDir string `short:"d" name:"data-dir" env:"EODATADIR" required:"true" help:"path to data dir"`
 }
 

@@ -9,11 +9,9 @@ FROM alpine
 
 COPY --from=builder /build/espotad /espotad
 
-ENV EOBIND :8092
-#ENV EOBASEURL http://localhost:8092/
 ENV EODATADIR /data
 
 VOLUME ["/data"]
-EXPOSE 8092
+EXPOSE 80
 
 ENTRYPOINT ["/espotad"]

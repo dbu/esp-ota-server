@@ -2,5 +2,6 @@ package assets
 
 import "embed"
 
-//go:embed 403.ghtm
+//go:embed index.ghtm
+//go:embed iplist.ghtm
 var Assets embed.FS

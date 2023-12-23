@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<title>Multiple devices found</title>
+</head>
+<body>
+		<h1>Found multiple devices with network {{ .network }}</h1>
+		<p>Try these, hopefully one will work</p>
+		<ul>
+		    {{ range $_, $ip := .ips }}
+		    <li><a href="http://{{$ip}}">{{$ip}}</a></li>
+		    {{ end }}
+		</ul>
+</body>
+</html>

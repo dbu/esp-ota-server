@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<title>ESP</title>
+</head>
+<body>
+	<center>
+		<h1>Looking for your device?</h1>
+	</center>
+	<form id="form">
+		<label for="network">WiFi network</label>
+		<input id="network" name="network"/>
+		<button>Search</button>
+	</form>
+<script>
+	element = document.getElementById("form")
+	if (element.addEventListener) {
+		element.addEventListener("submit", function(evt) {
+			evt.preventDefault();
+
+			let network = document.getElementById('network').value
+			console.log(network)
+			if (network) {
+				window.location.href='/lookup/'+network
+			}
+		}, true);
+	}
+	else {
+		element.attachEvent('onsubmit', function(evt){
+			evt.preventDefault();
+
+			let network = document.getElementById('network').value
+			console.log(network)
+			if (network) {
+				window.location.href='/lookup/'+network
+			}
+		});
+	}
+</script>
+</body>
+</html>
